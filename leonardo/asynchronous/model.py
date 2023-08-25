@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-from ..const import API_BASE
-from ..errors import RequestError
+import asyncio
 from typing import TYPE_CHECKING
 
+from ..const import API_BASE
+from ..errors import RequestError
+
 if TYPE_CHECKING:
-  import aiohttp
   from datetime import datetime
+
+  import aiohttp
+
+  from .api import LeonardoAsync
+  from .image import InitImage
 
 class AsyncModel:
   _session: aiohttp.ClientSession
+  _api: LeonardoAsync
 
   id: str
   name: str
@@ -27,6 +34,7 @@ class AsyncModel:
   def __init__(
     self, id: str, *, 
     _session: aiohttp.ClientSession,
+    _api: LeonardoAsync,
     name: str = None,
     description: str = None,
     model_width: int = None,
@@ -41,6 +49,7 @@ class AsyncModel:
   ) -> None:
     self.id = id
     self._session = _session
+    self._api = _api
     self.name = name
     self.description = description
     self.model_height = model_height
@@ -55,6 +64,7 @@ class AsyncModel:
 
   async def generate(self,*,
     prompt: str,
+    wait: bool = False, # Whether or not we should wait for this generation to finish generating. False returns the gen id immediately and lets the user wait.
     negative_prompt: str = None,
     sd_version: str = None,
     num_images: int = 1,
@@ -63,7 +73,7 @@ class AsyncModel:
     num_inference_steps: int = 45,
     guidance_scale: int = 7,
     init_generation_image_id: str = None,
-    init_image_id: str = None,
+    init_image_id: str|InitImage = None,
     init_strength: float = None,
     scheduler: str = "EULER_DISCRETE",
     preset_style: str = "LEONARDO",
@@ -71,8 +81,7 @@ class AsyncModel:
     public: bool = False,
     prompt_magic: bool = False,
     control_net: bool = False,
-    control_net_type: str = None,
-    return_generation: bool = False
+    control_net_type: str = None
   ) -> str:
     "take in a bunch of parameters, return generation id"
 
@@ -96,6 +105,9 @@ class AsyncModel:
       num_images = max(1,min(4,num_images))
     else:
       num_images = max(1,min(8,num_images))
+
+    if type(init_image_id) is InitImage:
+      init_image_id = init_image_id.id
 
     # correct string inputs
     scheduler = scheduler.upper()
@@ -144,6 +156,15 @@ class AsyncModel:
 
     async with self._session.post(url, json=params) as resp:
       if resp.status == 200:
-        return (await resp.json())["sdGenerationJob"]["generationId"]
+        generation_id = (await resp.json())["sdGenerationJob"]["generationId"]
+        if not wait:
+          return generation_id
+        else:
+          complete = False
+          while not complete:
+            generation = await self._api.get_generation(generation_id)
+            complete = generation.complete
+            await asyncio.sleep(1)
+          return generation
       else:
         raise RequestError(f"attempted generation: {resp.status} {await resp.text()}")

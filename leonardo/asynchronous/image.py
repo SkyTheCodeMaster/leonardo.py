@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-  import aiohttp
-  from typing import Union,Any
   import io
+  from datetime import datetime
   from os import PathLike
+  from typing import Any, Union
+
+  import aiohttp
 
 class Image:
   url: str
@@ -44,3 +46,18 @@ class Image:
     else:
       with open(fp, "wb") as f:
         return f.write(data)
+      
+class InitImage:
+  created_at: datetime
+  id: str
+  url: str
+  def __init__(self, *,
+      created_at: str|datetime,
+      id: str,
+      url: str) -> None:
+    if type(created_at) is str:
+      self.created_at = datetime.fromisoformat(created_at)
+    else:
+      self.created_at = created_at
+    self.id = id
+    self.url = url

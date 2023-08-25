@@ -3,3 +3,6 @@ class LeonardoError(Exception):
 
 class RequestError(LeonardoError):
   pass
+
+class InvalidInitImageFormat(RequestError):
+  pass

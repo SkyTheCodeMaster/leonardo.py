@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import json
+from io import BytesIO
+from datetime import datetime
+from typing import TYPE_CHECKING
+
 import aiohttp
 
-from .model import AsyncModel
+from ..common.initinstructions import InitUploadInstructions
 from ..common.userinfo import UserInformation
 from ..const import API_BASE
+from ..errors import *
 from .generation import Generation
-from .image import Image
-from datetime import datetime
-
-from typing import TYPE_CHECKING
+from .image import Image, InitImage
+from .model import AsyncModel
 
 if TYPE_CHECKING:
   from typing import Union
@@ -38,6 +42,8 @@ class LeonardoAsync:
   async def me(self) -> UserInformation:
     url = f"{API_BASE}/me"
     async with self._session.get(url) as resp:
+      if resp.status != 200:
+        return RequestError(f"Request returned HTTP{resp.status} {await resp.text()}")
       data: dict[str,Union[str,int]] = (await resp.json())["user_details"][0]
       return UserInformation(
         id=data["user"]["id"],
@@ -50,17 +56,20 @@ class LeonardoAsync:
       )
 
   async def models(self) -> list[AsyncModel]:
-    raise NotImplementedError("Yikes")
+    raise NotImplementedError("Coming Soon")
   
   async def get_model_by_id(self, id: str) -> AsyncModel:
     if id in self._model_cache:
       return self._model_cache[id]
     url = f"{API_BASE}/models/{id}"
     async with self._session.get(url) as resp:
+      if resp.status != 200:
+        return RequestError(f"Request returned HTTP{resp.status} {await resp.text()}")
       data = (await resp.json())["custom_models_by_pk"]
       model = AsyncModel(
         id,
         _session = self._session,
+        _api = self,
         name = data["name"],
         description = data["description"],
         model_height = data["modelHeight"],
@@ -79,6 +88,8 @@ class LeonardoAsync:
   async def get_generation(self,generation_id: str) -> Generation:
     url = f"{API_BASE}/generations/{generation_id}"
     async with self._session.get(url) as resp:
+      if resp.status != 200:
+        return RequestError(f"Request returned HTTP{resp.status} {await resp.text()}")
       data = (await resp.json())["generations_by_pk"]
       images: list[Image] = []
       for image in data["generated_images"]:
@@ -92,6 +103,7 @@ class LeonardoAsync:
         images.append(i)
       gen = Generation(
         images=images,
+        complete = bool(images), # If gen isnt complete, the api returns empty images, which leads to this being true/false
         model_id=data["modelId"],
         model = self._model_cache.get(data["modelId"],None),
         prompt=data.get("prompt",None),
@@ -119,6 +131,8 @@ class LeonardoAsync:
       user_id = self.user_information.id
     url = f"{API_BASE}/generations/user/{user_id}?offset={offset}&limit={limit}"
     async with self._session.get(url) as resp:
+      if resp.status != 200:
+        return RequestError(f"Request returned HTTP{resp.status} {await resp.text()}")
       gens: list[Generation] = []
       top_data = await (resp.json())["generations"]
       for data in top_data:
@@ -160,4 +174,62 @@ class LeonardoAsync:
     async with self._session.delete(url) as resp:
       return resp.status == 200
     
-  
+  async def get_init_image(self, image_id: str):
+    url = f"{API_BASE}/init-image/{image_id}"
+    async with self._session.get(url) as resp:
+      if resp.status != 200:
+        return RequestError(f"Request returned HTTP{resp.status} {await resp.text()}")
+      data = (await resp.json())["init_images_by_pk"]
+      return InitImage(
+        created_at=data["createdAt"],
+        id=data["id"],
+        url=data["url"]
+      )
+    
+  async def _upload_init_image(self, extension: str) -> InitUploadInstructions:
+    url = f"{API_BASE}/init-image"
+
+    if extension not in [
+      "png", "jpg", "jpeg", "webp"
+    ]: raise InvalidInitImageFormat(f"got: {extension}; expected: png, jpg, jpeg, webp")
+
+    async with self._session.post(url, data={"extension": extension}) as resp:
+      if resp.status != 200:
+        raise RequestError(f"Request returned HTTP{resp.status} {await resp.text()}")
+      data = (await resp.json())["uploadInitImage"]
+      return InitUploadInstructions(
+        id = data["id"],
+        fields=json.loads(data["fields"]),
+        key=data["key"],
+        url=data["url"],
+      )
+    
+  async def upload_init_image(self, *,
+      filename: str = None,
+      bytes: BytesIO = None,
+      filetype: str = None,) -> InitImage:
+    """
+    File name and bytes are mutually exclusive.
+    If file name is passed, do not pass bytes, and vice versa.
+    If bytes is passed, filetype is required.
+    If filetype is passed, it overrides the file name detection.
+    """
+
+    if filename and bytes:
+      raise ValueError("File name and bytes both passed")
+    if bytes and filetype is None:
+      raise ValueError("Bytes passed, filetype not passed")
+    if filename is None and bytes is None:
+      raise ValueError("Bytes or file name not passed")
+    if (filetype is None) and (filename is not None):
+      filetype = filename.split(".")[-1]
+
+    if filename:
+      with open(filename, "rb") as f:
+        bytes = BytesIO(f.read())
+    instructions = await self._upload_init_image(filetype)
+    print(instructions.fields)
+    data = {**instructions.fields, "file": bytes}
+
+    async with self._session.post(instructions.url, data=data, headers = {"authorization":instructions.key}) as resp:
+      return await resp.text()

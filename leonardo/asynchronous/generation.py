@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 class Generation:
   images: list[Image]
   model_id: str
+  complete: bool
   model: AsyncModel
   prompt: str
   negative_prompt: str
@@ -31,6 +32,7 @@ class Generation:
       self,
       *,
       images: list[Image],
+      complete: bool,
       model_id: str,
       model: AsyncModel,
       prompt: str,
@@ -50,6 +52,7 @@ class Generation:
       created_at: datetime,
   ) -> None:
     self.images = images
+    self.complete = complete
     self.model_id = model_id
     self.model = model
     self.prompt = prompt
